@@ -154,6 +154,8 @@ def test_mapping_respects_letterboxing(app):
     assert rect.width() == pytest.approx(400 * 4 / 3, abs=2) and rect.height() == pytest.approx(400, abs=1)
     assert widget._to_norm(rect.center()) == pytest.approx((0.5, 0.5), abs=0.01)
     assert widget._to_norm(QPoint(0, 200)) == pytest.approx((0.0, 0.5), abs=0.01)   # in the bar: clamped
+    widget.close()
+    widget.deleteLater()
 
 
 def test_paints_every_state_without_error(view, tmp_path):

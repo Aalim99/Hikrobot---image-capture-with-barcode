@@ -63,8 +63,20 @@ class FakeWorld:
         self.pixel_format = BAYER_GB8
         self.open_ret = 0
         self.frames_before_dead = None   # after N frames every grab fails
-        self.float_nodes = {"ExposureTime": 8000.0, "Gain": 2.5, "AcquisitionFrameRate": 19.0}
-        self.float_limits = {"AcquisitionFrameRate": (1.0, 19.0)}
+        self.float_nodes = {"ExposureTime": 8000.0, "Gain": 2.5, "AcquisitionFrameRate": 19.0, "Gamma": 1.0}
+        self.float_limits = {"AcquisitionFrameRate": (1.0, 19.0), "Gamma": (0.1, 4.0)}
+        # enum features by entry name, in the camera's own numeric order (white balance
+        # lists Continuous before Once, exposure/gain the other way round)
+        self.enum_codes = {
+            "ExposureAuto": {"Off": 0, "Once": 1, "Continuous": 2},
+            "GainAuto": {"Off": 0, "Once": 1, "Continuous": 2},
+            "BalanceWhiteAuto": {"Off": 0, "Continuous": 1, "Once": 2},
+            "GammaSelector": {"User": 1, "sRGB": 2},
+        }
+        self.enum_state = {"ExposureAuto": 0, "GainAuto": 0, "BalanceWhiteAuto": 1, "GammaSelector": 2}
+        self.bool_state = {"GammaEnable": False, "AcquisitionFrameRateEnable": False}
+        self.reject_by_string = False    # firmware that refuses SetEnumValueByString
+        self.bool_getter_style = "instance"  # which argument shape MV_CC_GetBoolValue accepts
         self.reject_nodes = set()        # set*() on these names fails
         self.calls = []                  # (method, name, value) in order
         self.frames_sent = 0
@@ -144,16 +156,35 @@ class MvCamera:
             if value not in FAKE.supported_pixel_formats:
                 return 0x80000106
             FAKE.pixel_format = value
+        elif name in FAKE.enum_codes:
+            if value not in FAKE.enum_codes[name].values():
+                return 0x80000106
+            FAKE.enum_state[name] = value
+        return 0
+
+    def MV_CC_SetEnumValueByString(self, name, symbol):
+        FAKE.calls.append(("set_enum_str", name, symbol))
+        if name in FAKE.reject_nodes or FAKE.reject_by_string:
+            return 0x80000106
+        if symbol not in FAKE.enum_codes.get(name, {}):
+            return 0x80000106
+        FAKE.enum_state[name] = FAKE.enum_codes[name][symbol]
         return 0
 
     def MV_CC_GetEnumValue(self, name, out):
-        if name != "PixelFormat":
-            return 0x80000106
-        out.nCurValue = FAKE.pixel_format
-        out.nSupportedNum = len(FAKE.supported_pixel_formats)
-        for i, code in enumerate(FAKE.supported_pixel_formats):
-            out.nSupportValue[i] = code
-        return 0
+        if name == "PixelFormat":
+            out.nCurValue = FAKE.pixel_format
+            out.nSupportedNum = len(FAKE.supported_pixel_formats)
+            for i, code in enumerate(FAKE.supported_pixel_formats):
+                out.nSupportValue[i] = code
+            return 0
+        if name in FAKE.enum_state:
+            out.nCurValue = FAKE.enum_state[name]
+            out.nSupportedNum = len(FAKE.enum_codes[name])
+            for i, code in enumerate(FAKE.enum_codes[name].values()):
+                out.nSupportValue[i] = code
+            return 0
+        return 0x80000106
 
     def MV_CC_SetFloatValue(self, name, value):
         FAKE.calls.append(("set_float", name, value))
@@ -172,7 +203,21 @@ class MvCamera:
 
     def MV_CC_SetBoolValue(self, name, value):
         FAKE.calls.append(("set_bool", name, value))
-        return 0x80000106 if name in FAKE.reject_nodes else 0
+        if name in FAKE.reject_nodes:
+            return 0x80000106
+        FAKE.bool_state[name] = bool(value)
+        return 0
+
+    def MV_CC_GetBoolValue(self, name, out):
+        """Like the real wrapper, accepts only one argument shape (set by the test)."""
+        is_reference = hasattr(out, "_obj")   # what ctypes.byref() returns
+        if is_reference != (FAKE.bool_getter_style == "byref"):
+            raise TypeError("wrong argument type for this SDK version")
+        if name not in FAKE.bool_state:
+            return 0x80000106
+        target = out._obj if is_reference else out
+        target.value = FAKE.bool_state[name]
+        return 0
 
     def MV_CC_GetIntValue(self, name, out):
         values = {"PayloadSize": FAKE.payload(), "Width": FAKE.width, "Height": FAKE.height}

@@ -123,15 +123,16 @@ class SaveSignals(QObject):
 
 
 class SaveTask(QRunnable):
-    def __init__(self, signals, output_dir, sn, frame, details, jpeg_quality):
+    def __init__(self, signals, output_dir, sn, frame, details, jpeg_quality, image_format="jpg"):
         super().__init__()
         self._signals = signals
-        self._args = (output_dir, sn, frame, details, jpeg_quality)
+        self._args = (output_dir, sn, frame, details, jpeg_quality, image_format)
 
     def run(self):
-        output_dir, sn, frame, details, quality = self._args
+        output_dir, sn, frame, details, quality, image_format = self._args
         try:
-            saved = save_capture(output_dir, sn, frame.bgr(), details=details, jpeg_quality=quality)
+            saved = save_capture(output_dir, sn, frame.bgr(best=True), details=details,
+                                 jpeg_quality=quality, image_format=image_format)
         except Exception as exc:  # OSError (disk/permissions), cv2.error, MemoryError...
             self._signals.failed.emit(f"{type(exc).__name__}: {exc}", sn)
         else:

@@ -129,5 +129,8 @@ class DemoCamera:
     def apply_settings(self, settings):
         pass
 
+    def balance_once(self) -> bool:
+        return True
+
     def close(self):
         pass

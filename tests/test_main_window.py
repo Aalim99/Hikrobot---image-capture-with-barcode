@@ -300,3 +300,59 @@ def test_window_closes_cleanly_with_a_save_in_flight(qapp, tmp_path, monkeypatch
     win.close()
     assert not win.worker.isRunning()
     assert list((tmp_path / "captures").rglob("*.jpg")), "the image being written was finished before exit"
+
+
+def test_png_capture_is_saved_full_resolution_and_lossless(rig):
+    rig.win.settings["image_format"] = "png"
+    rig.win._apply_scan_area(ITEM2_BOX)
+    rig.arm()
+    assert wait_until(lambda: rig.win.session_count == 1)
+
+    png = rig.captures / "SN-DEMO-0002" / "SN-DEMO-0002_attempt_1.png"
+    assert png.exists() and png.read_bytes()[:4] == b"\x89PNG"
+    assert cv2.imdecode(np.fromfile(str(png), np.uint8), cv2.IMREAD_COLOR).shape[:2] == (912, 1368)
+    assert "PNG lossless" in (png.parent / "log.txt").read_text(encoding="utf-8")
+    assert [p.suffix for p in rig.files("*attempt*")] == [".png"]
+
+
+def test_changing_format_mid_session_keeps_numbering(rig):
+    rig.win._apply_scan_area(ITEM2_BOX)
+    rig.arm()
+    assert wait_until(lambda: rig.win.session_count == 1)
+    rig.win.settings["image_format"] = "png"
+    rig.show(None)
+    QTest.qWait(1200)
+    rig.show("SN-DEMO-0002")
+    assert wait_until(lambda: rig.win.session_count == 2)
+    assert [p.name for p in rig.files("*attempt*")] == ["SN-DEMO-0002_attempt_1.jpg", "SN-DEMO-0002_attempt_2.png"]
+
+
+def test_camera_warnings_are_visible_then_clear(rig):
+    win = rig.win
+    assert not win.warn_label.isVisible()
+
+    rig.camera.warnings = ["could not set Gamma"]
+    assert wait_until(win.warn_label.isVisible)
+    assert win.warn_label.text() == "⚠ 1 camera setting not applied"
+    assert "could not set Gamma" in win.warn_label.toolTip() and "--features" in win.warn_label.toolTip()
+
+    rig.camera.warnings = ["a", "b"]
+    assert wait_until(lambda: "2 camera settings" in win.warn_label.text())
+
+    rig.camera.warnings = []
+    assert wait_until(lambda: not win.warn_label.isVisible())
+
+
+def test_white_balance_and_gamma_changes_are_applied_to_the_camera_live(rig, monkeypatch):
+    applied = []
+    monkeypatch.setattr(rig.win.camera, "apply_settings", applied.append)
+
+    rig.win._apply_settings({"white_balance": "auto"})
+    rig.win._apply_settings({"gamma_override": True, "gamma": 2.2})
+    assert [(a.white_balance, a.gamma_override, a.gamma) for a in applied] == [
+        ("auto", False, 1.0), ("auto", True, 2.2)]
+
+    rig.win._apply_settings({"image_format": "png", "jpeg_quality": 70})   # nothing camera-side changed
+    assert len(applied) == 2
+    saved = config.load_settings()
+    assert (saved["white_balance"], saved["gamma"], saved["image_format"]) == ("auto", 2.2, "png")

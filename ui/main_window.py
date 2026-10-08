@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
         self._have_frame = False
         self._result_times = deque(maxlen=12)
         self._shown_status = None
+        self._shown_warnings = ()
 
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)        # saves run one at a time, in order
@@ -191,6 +192,11 @@ class MainWindow(QMainWindow):
         self.camera_title = QLabel(self.camera.title)
         self.camera_title.setObjectName("hint")
         bar.addWidget(self.camera_title)
+        bar.addSpacing(10)
+        self.warn_label = QLabel()
+        self.warn_label.setStyleSheet(f"color: {C['warn']}; font-weight: 700; font-size: 9pt;")
+        self.warn_label.hide()
+        bar.addWidget(self.warn_label)
         bar.addStretch()
         decoder = QLabel(f"barcode decoder: {BACKEND_NAME}")
         decoder.setObjectName("hint")
@@ -415,6 +421,23 @@ class MainWindow(QMainWindow):
         title = self.camera.title
         if self.camera_title.text() != title:
             self.camera_title.setText(title)
+        self._update_warnings()
+
+    def _update_warnings(self):
+        """Show camera settings the camera refused, instead of failing silently."""
+        warnings = tuple(self.camera.warnings)
+        if warnings == self._shown_warnings:
+            return
+        self._shown_warnings = warnings
+        if not warnings:
+            self.warn_label.hide()
+            return
+        count = len(warnings)
+        self.warn_label.setText(f"⚠ {count} camera setting{'s' if count != 1 else ''} not applied")
+        self.warn_label.setToolTip(
+            "The camera did not accept:\n" + "\n".join(f"• {w}" for w in warnings)
+            + "\n\nRun  python list_cameras.py --grab --features  to see what this camera supports.")
+        self.warn_label.show()
 
     # ---------- the loop ----------
 
@@ -473,7 +496,7 @@ class MainWindow(QMainWindow):
             "Capture delay": f"{self.settings['capture_delay_seconds']:.1f} s",
         }
         self.pool.start(SaveTask(self.save_signals, self.settings["output_dir"], sn, frame,
-                                 details, self.settings["jpeg_quality"]))
+                                 details, self.settings["jpeg_quality"], self.settings["image_format"]))
 
     def _on_saved(self, saved, sn):
         self.session_count += 1
@@ -581,7 +604,8 @@ class MainWindow(QMainWindow):
         self._dialog_open = True
         self._update_pause()
         try:
-            dialog = SettingsDialog(self, self.settings, demo=self.demo)
+            dialog = SettingsDialog(self, self.settings, demo=self.demo,
+                                    on_balance_once=self.camera.balance_once)
             if dialog.exec():
                 self._apply_settings(dialog.values())
         finally:
@@ -592,7 +616,8 @@ class MainWindow(QMainWindow):
         old = self.settings
         device_changed = new.get("camera_serial", old["camera_serial"]) != old["camera_serial"]
         tuning_changed = any(new.get(key, old[key]) != old[key] for key in
-                             ("exposure_auto", "exposure_us", "gain_auto", "gain_db", "acquisition_fps"))
+                             ("exposure_auto", "exposure_us", "gain_auto", "gain_db", "acquisition_fps",
+                              "white_balance", "gamma_override", "gamma"))
         old.update(new)
         config_module.save_settings(old)
 

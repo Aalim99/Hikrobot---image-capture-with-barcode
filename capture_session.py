@@ -1,12 +1,13 @@
 """Saving a captured image to disk under its barcode folder.
 
 Layout:
-    {output_dir}/{barcode}/{barcode}_attempt_{N}.jpg
+    {output_dir}/{barcode}/{barcode}_attempt_{N}.jpg   (or .png)
     {output_dir}/{barcode}/log.txt          (one block appended per attempt)
 
 Every capture (including the first) is numbered, so a re-scan of the same
 barcode just gets the next attempt number and nothing already on disk is
-ever overwritten.
+ever overwritten. The number is shared across formats, so switching between
+JPEG and PNG never reuses one.
 """
 import os
 import re
@@ -15,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
+
+IMAGE_FORMATS = ("jpg", "png")
+PNG_COMPRESSION = 1   # fastest; higher levels barely shrink a 20 MP photo but cost seconds
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
@@ -38,7 +42,7 @@ def sanitize_sn(raw_sn: str) -> str:
 
 
 def next_attempt_number(folder: Path, clean_sn: str) -> int:
-    pattern = re.compile(rf"^{re.escape(clean_sn)}_attempt_(\d+)\.jpg$", re.IGNORECASE)
+    pattern = re.compile(rf"^{re.escape(clean_sn)}_attempt_(\d+)\.(?:jpg|png)$", re.IGNORECASE)
     numbers = []
     if folder.is_dir():
         for entry in folder.iterdir():
@@ -55,11 +59,22 @@ def _write_atomic(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def encode_jpeg(image_bgr, quality: int) -> bytes:
-    ok, buffer = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+def encode_image(image_bgr, image_format: str = "jpg", quality: int = 95) -> bytes:
+    """Encode to JPEG (lossy, `quality` 1-100) or PNG (lossless, quality unused)."""
+    if image_format == "jpg":
+        params = [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
+    elif image_format == "png":
+        params = [cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION]
+    else:
+        raise ValueError(f"unknown image format {image_format!r} (use one of {IMAGE_FORMATS})")
+    ok, buffer = cv2.imencode(f".{image_format}", image_bgr, params)
     if not ok:
-        raise OSError("could not encode the image as JPEG")
+        raise OSError(f"could not encode the image as {image_format.upper()}")
     return buffer.tobytes()
+
+
+def encode_jpeg(image_bgr, quality: int) -> bytes:
+    return encode_image(image_bgr, "jpg", quality)
 
 
 def save_capture(
@@ -69,6 +84,7 @@ def save_capture(
     details: dict | None = None,
     jpeg_quality: int = 95,
     when: datetime | None = None,
+    image_format: str = "jpg",
 ) -> SavedCapture:
     """Write `image_bgr` as the next attempt for `sn`.
 
@@ -78,19 +94,21 @@ def save_capture(
     non-ASCII characters on Windows.
     """
     clean_sn = sanitize_sn(sn)
+    data = encode_image(image_bgr, image_format, jpeg_quality)   # fail on a bad format before touching disk
     folder = Path(output_dir) / clean_sn
     folder.mkdir(parents=True, exist_ok=True)
 
     attempt = next_attempt_number(folder, clean_sn)
-    image_path = folder / f"{clean_sn}_attempt_{attempt}.jpg"
-    _write_atomic(image_path, encode_jpeg(image_bgr, jpeg_quality))
+    image_path = folder / f"{clean_sn}_attempt_{attempt}.{image_format}"
+    _write_atomic(image_path, data)
 
     height, width = image_bgr.shape[:2]
     when = when or datetime.now()
     lines = [
         f"=== Attempt {attempt} - {when.strftime('%Y-%m-%d %H:%M:%S')} ===",
         f"Barcode: {sn}",
-        f"Image: {image_path.name} ({width}x{height}, JPEG quality {jpeg_quality})",
+        f"Image: {image_path.name} ({width}x{height}, "
+        + ("PNG lossless" if image_format == "png" else f"JPEG quality {jpeg_quality}") + ")",
     ]
     for label, value in (details or {}).items():
         lines.append(f"{label}: {value}")

@@ -2,7 +2,8 @@
 
     python list_cameras.py                  is the MVS SDK found? which cameras are connected?
     python list_cameras.py --grab           ...and open the camera, grab one frame, save it
-    python list_cameras.py --grab --serial DA1234567 --out test.jpg
+    python list_cameras.py --features       ...and list which image settings this camera supports
+    python list_cameras.py --grab --features --serial DA1234567 --out test.jpg
 
 Run this before the main app. It prints exactly which step fails (SDK not
 installed, no camera on the USB bus, camera busy in MVS, no frames arriving)
@@ -23,6 +24,8 @@ def _step(ok, text):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Check the Hikrobot camera setup")
     parser.add_argument("--grab", action="store_true", help="open the camera and save one frame")
+    parser.add_argument("--features", action="store_true",
+                        help="open the camera and list which white balance / gamma / ... settings it supports")
     parser.add_argument("--serial", default="", help="camera serial number (default: first found)")
     parser.add_argument("--out", default="camera_test.jpg", help="where --grab saves the frame")
     args = parser.parse_args(argv)
@@ -44,11 +47,11 @@ def main(argv=None):
     for device in devices:
         print(f"     - {device.label}")
 
-    if not args.grab:
-        print("\nAll good so far. Add --grab to test streaming.")
+    if not (args.grab or args.features):
+        print("\nAll good so far. Add --grab to test streaming, --features to see supported settings.")
         return 0
 
-    print("3. Streaming one frame")
+    print("3. Opening the camera")
     camera = hik_camera.HikCamera(hik_camera.CameraSettings(serial=args.serial))
     try:
         if not _step(camera.open(), camera.error or f"opened {camera.describe()}"):
@@ -56,6 +59,14 @@ def main(argv=None):
         for warning in camera.warnings:
             print(f"     note: {warning}")
 
+        if args.features:
+            print("   Image settings this camera supports")
+            for name, kind, supported, detail in camera.probe_features():
+                print(f"  [{'OK' if supported else '--'}] {name:<34} {kind:<5} {detail}")
+            if not args.grab:
+                return 0
+
+        print("   Streaming one frame")
         started = time.time()
         frame = None
         while frame is None and time.time() - started < 8:

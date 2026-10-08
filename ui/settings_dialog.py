@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from shiboken6 import isValid
+
 import hik_camera
 
 
@@ -64,19 +66,20 @@ def _spin(low, high, value, decimals=None, step=None, suffix=""):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent, settings: dict, demo: bool = False):
+    def __init__(self, parent, settings: dict, demo: bool = False, on_balance_once=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(1000)
         self._settings = settings
         self._demo = demo
+        self._on_balance_once = on_balance_once   # callable -> bool, measures white balance now
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(14)
 
         # ---- saving ----
-        saving, form, _ = _section("Saving")
+        saving, form, saving_box = _section("Saving")
         self.output_dir = QLineEdit(settings["output_dir"])
         browse = QPushButton("Browse…")
         browse.setProperty("variant", "ghost")
@@ -84,9 +87,17 @@ class SettingsDialog(QDialog):
         row = _row(self.output_dir, browse)
         row.setStretch(0, 1)
         form.addRow("Output folder", row)
+        self.image_format = QComboBox()
+        self.image_format.addItem("JPEG", "jpg")
+        self.image_format.addItem("PNG (lossless)", "png")
+        self.image_format.setCurrentIndex(max(self.image_format.findData(settings.get("image_format", "jpg")), 0))
+        form.addRow("Image format", self.image_format)
         self.jpeg_quality = _spin(1, 100, int(settings["jpeg_quality"]))
         form.addRow("JPEG quality", self.jpeg_quality)
-        root.addWidget(saving)
+        saving_box.addWidget(_note("PNG keeps every pixel exactly, but the files are several times larger "
+                                   "than JPEG and a 20 MP picture can take a few seconds to write."))
+        self.image_format.currentIndexChanged.connect(self._format_changed)
+        self._format_changed()
 
         # ---- camera ----
         camera, form, camera_box = _section("Camera")
@@ -110,14 +121,41 @@ class SettingsDialog(QDialog):
         row.addStretch()
         form.addRow("Gain", row)
 
+        self.wb_combo = QComboBox()
+        self.wb_combo.addItem("Camera default (don't change)", "camera")
+        self.wb_combo.addItem("Auto", "auto")
+        self.wb_combo.addItem("Off", "off")
+        self.wb_combo.setCurrentIndex(max(self.wb_combo.findData(settings.get("white_balance", "camera")), 0))
+        self.balance_btn = QPushButton("Balance now")
+        self.balance_btn.setProperty("variant", "ghost")
+        self.balance_btn.setToolTip("Point the camera at a white or grey sheet, then click.")
+        self.balance_btn.clicked.connect(self._balance_now)
+        row = _row(self.wb_combo, self.balance_btn)
+        row.setStretch(0, 1)
+        form.addRow("White balance", row)
+
+        self.gamma_override = QCheckBox("Set")
+        self.gamma = _spin(0.1, 4.0, float(settings.get("gamma", 1.0)), decimals=2, step=0.1)
+        self.gamma_override.setChecked(bool(settings.get("gamma_override", False)))
+        self.gamma.setEnabled(self.gamma_override.isChecked())
+        self.gamma_override.toggled.connect(self.gamma.setEnabled)
+        row = _row(self.gamma_override, self.gamma)
+        row.addStretch()
+        form.addRow("Gamma", row)
+
         self.fps = _spin(1, 60, float(settings["acquisition_fps"]), decimals=1, step=1, suffix=" fps")
         form.addRow("Frame rate cap", self.fps)
         camera_box.addWidget(_note("A full 20 MP frame is ~20 MB, so ~10 fps is plenty for reading "
                                    "barcodes and keeps the USB 3.0 link comfortable."))
+        camera_box.addWidget(_note("'Camera default' puts back whatever the camera had when it connected. "
+                                   "Settings a camera does not support are skipped; a warning then appears "
+                                   "next to the camera name."))
+        self.balance_note = _note()
+        self.balance_note.hide()
+        camera_box.addWidget(self.balance_note)
         self.camera_note = _note()
         self.camera_note.hide()
         camera_box.addWidget(self.camera_note)
-        root.addWidget(camera)
 
         self.exposure_auto.setChecked(bool(settings["exposure_auto"]))
         self.gain_auto.setChecked(bool(settings["gain_auto"]))
@@ -134,7 +172,20 @@ class SettingsDialog(QDialog):
         form.addRow("Barcode gone before re-capture", self.lost_reset)
         self.stable_reads = _spin(1, 10, int(settings["barcode_stable_reads"]))
         form.addRow("Identical reads required", self.stable_reads)
-        root.addWidget(auto)
+
+        # two columns: Saving + Auto-capture on the left, Camera on the right
+        columns = QHBoxLayout()
+        columns.setSpacing(14)
+        left, right = QVBoxLayout(), QVBoxLayout()
+        left.setSpacing(14)
+        left.addWidget(saving)
+        left.addWidget(auto)
+        left.addStretch()
+        right.addWidget(camera)
+        right.addStretch()
+        columns.addLayout(left, 1)
+        columns.addLayout(right, 1)
+        root.addLayout(columns)
 
         # ---- buttons ----
         buttons = QHBoxLayout()
@@ -151,13 +202,27 @@ class SettingsDialog(QDialog):
 
         if demo:
             for widget in (self.camera_combo, refresh, self.exposure_auto, self.exposure_us,
-                           self.gain_auto, self.gain_db, self.fps):
+                           self.gain_auto, self.gain_db, self.fps, self.wb_combo, self.balance_btn,
+                           self.gamma_override, self.gamma):
                 widget.setEnabled(False)
             self.camera_note.setText("Demo mode: the camera is simulated, so camera settings are off.")
             self.camera_note.show()
             self.camera_combo.addItem("Demo camera (synthetic)", "")
         else:
             self._fill_cameras()
+        if self._on_balance_once is None:
+            self.balance_btn.setEnabled(False)
+
+    def _format_changed(self):
+        self.jpeg_quality.setEnabled(self.image_format.currentData() == "jpg")
+
+    def _balance_now(self):
+        ok = bool(self._on_balance_once and self._on_balance_once())
+        self.balance_note.setText(
+            "White balance measured from what the camera sees now." if ok
+            else "The camera did not accept it (not connected, or not supported by this camera).")
+        self.balance_note.show()
+        QTimer.singleShot(0, self._fit_height)
 
     def _fill_cameras(self):
         current = self._settings["camera_serial"]
@@ -185,6 +250,8 @@ class SettingsDialog(QDialog):
     def _fit_height(self):
         # Word-wrapped notes need more height than the dialog's first size
         # estimate gives them, which squashes the controls above them.
+        if not isValid(self):   # the deferred call can outlive the dialog
+            return
         needed = self.layout().totalHeightForWidth(self.width())
         if needed > self.height():
             self.resize(self.width(), needed)
@@ -209,6 +276,7 @@ class SettingsDialog(QDialog):
         """The settings as edited (merge into the existing dict)."""
         values = {
             "output_dir": self.output_dir.text().strip(),
+            "image_format": self.image_format.currentData(),
             "jpeg_quality": int(self.jpeg_quality.value()),
             "capture_delay_seconds": float(self.delay.value()),
             "barcode_lost_reset_seconds": float(self.lost_reset.value()),
@@ -221,6 +289,9 @@ class SettingsDialog(QDialog):
                 "exposure_us": float(self.exposure_us.value()),
                 "gain_auto": self.gain_auto.isChecked(),
                 "gain_db": float(self.gain_db.value()),
+                "white_balance": self.wb_combo.currentData(),
+                "gamma_override": self.gamma_override.isChecked(),
+                "gamma": float(self.gamma.value()),
                 "acquisition_fps": float(self.fps.value()),
             })
         return values

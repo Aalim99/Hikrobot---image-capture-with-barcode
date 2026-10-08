@@ -66,3 +66,18 @@ def scene(width, height, items, background=70):
 def resize_to_width(image, width):
     height = int(image.shape[0] * width / image.shape[1])
     return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+
+
+def detail_image(height=240, width=320, seed=1):
+    """Thin coloured lines at every angle plus small text: the fine detail
+    (traces, silkscreen) where demosaicing quality shows."""
+    img = np.full((height, width, 3), 90, np.uint8)
+    rng = np.random.default_rng(seed)
+    for _ in range(40):
+        p0, p1 = rng.integers(0, [width, height], 2), rng.integers(0, [width, height], 2)
+        colour = tuple(int(c) for c in rng.integers(0, 255, 3))
+        cv2.line(img, tuple(int(v) for v in p0), tuple(int(v) for v in p1), colour,
+                 int(rng.integers(1, 3)), cv2.LINE_AA)
+    cv2.putText(img, "R1 C22 U3 0402", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (240, 240, 240), 1, cv2.LINE_AA)
+    cv2.putText(img, "R1 C22 U3 0402", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (30, 200, 240), 1, cv2.LINE_AA)
+    return img

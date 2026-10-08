@@ -9,9 +9,13 @@ DEFAULT_SETTINGS = {
     "exposure_us": 10000.0,       # used when exposure_auto is off
     "gain_auto": False,
     "gain_db": 0.0,               # used when gain_auto is off
+    "white_balance": "camera",    # "camera" = leave as the camera has it, "auto", or "off"
+    "gamma_override": False,      # False = leave gamma as the camera has it
+    "gamma": 1.0,                 # used when gamma_override is on
     "acquisition_fps": 10.0,      # cap; full-res 8-bit Bayer is ~20 MB/frame
     "capture_delay_seconds": 1.5,
     "barcode_lost_reset_seconds": 1.5,
+    "image_format": "jpg",        # "jpg" or "png" (lossless, larger and slower to write)
     "jpeg_quality": 95,
     "barcode_stable_reads": 2,
     "roi": None,                  # scan area [x, y, w, h] as 0..1 fractions, or null = whole frame

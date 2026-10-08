@@ -44,3 +44,28 @@ def test_grab_reports_busy_camera(fake, capsys, tmp_path):
     code, out = run(capsys, "--grab", "--out", str(tmp_path / "x.jpg"))
     assert code == 1 and "0x80000203" in out
     assert not (tmp_path / "x.jpg").exists()
+
+
+def test_features_lists_what_the_camera_supports_and_what_it_does_not(fake, capsys):
+    code, out = run(capsys, "--features")
+
+    assert code == 0, out
+    assert "Image settings this camera supports" in out
+    assert "[OK] PixelFormat" in out and "BayerGB8" in out
+    assert "[OK] Gamma " in out and "range 0.1 to 4" in out
+    assert "[OK] GammaEnable" in out and "off" in out
+    assert "[--] Sharpness" in out and "not found on this camera" in out
+    assert "Streaming one frame" not in out, "--features alone should not grab or save a frame"
+
+
+def test_features_and_grab_together(fake, capsys, tmp_path):
+    target = tmp_path / "both.jpg"
+    code, out = run(capsys, "--features", "--grab", "--out", str(target))
+    assert code == 0 and target.exists()
+    assert out.index("Image settings this camera supports") < out.index("first frame received")
+
+
+def test_features_reports_a_camera_that_will_not_open(fake, capsys):
+    fake.FAKE.open_ret = 0x80000203
+    code, out = run(capsys, "--features")
+    assert code == 1 and "0x80000203" in out and "Image settings" not in out

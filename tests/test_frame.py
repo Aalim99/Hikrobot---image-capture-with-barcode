@@ -1,8 +1,9 @@
+import cv2
 import numpy as np
 import pytest
 
-from frame import BAYER_TO_BGR, Frame
-from helpers import BAYER_BLOCKS, bayer_frame
+from frame import BAYER_TO_BGR, BAYER_TO_BGR_EA, Frame
+from helpers import BAYER_BLOCKS, bayer_frame, detail_image
 
 # stripes of pure red / green / blue (BGR order)
 RED, GREEN, BLUE = (20, 20, 220), (20, 220, 20), (220, 20, 20)
@@ -79,3 +80,44 @@ def test_bgr_and_mono_frames_pass_through():
 def test_unknown_pixel_format_is_rejected():
     with pytest.raises(ValueError):
         Frame(np.zeros((4, 4), np.uint8), "YUV422")
+
+
+# ---- edge-aware conversion (used for the saved image) ----
+
+@pytest.mark.parametrize("pixel_format", sorted(BAYER_BLOCKS))
+def test_edge_aware_conversion_keeps_the_colours_right(pixel_format):
+    source = _stripes()
+    out = bayer_frame(source, pixel_format).bgr(best=True)
+    assert out.shape == source.shape
+    for cols in (slice(6, 26), slice(38, 58), slice(70, 90)):
+        got = out[8:-8, cols].reshape(-1, 3).mean(axis=0)
+        want = source[8:-8, cols].reshape(-1, 3).mean(axis=0)
+        assert np.abs(got - want).max() < 12, f"{pixel_format}: {got} != {want}"
+
+
+def test_edge_aware_table_covers_every_pattern_and_matches_opencvs_four_letter_names():
+    assert set(BAYER_TO_BGR_EA) == set(BAYER_BLOCKS)
+    four_letter = {"BayerRG8": "COLOR_BayerRGGB2BGR_EA", "BayerGR8": "COLOR_BayerGRBG2BGR_EA",
+                   "BayerGB8": "COLOR_BayerGBRG2BGR_EA", "BayerBG8": "COLOR_BayerBGGR2BGR_EA"}
+    for pixel_format, name in four_letter.items():
+        if hasattr(cv2, name):   # newer OpenCV builds also expose these names
+            assert BAYER_TO_BGR_EA[pixel_format] == getattr(cv2, name), pixel_format
+
+
+@pytest.mark.parametrize("pixel_format", sorted(BAYER_BLOCKS))
+def test_edge_aware_is_closer_to_the_truth_than_bilinear_on_fine_detail(pixel_format):
+    truth = detail_image()
+    frame = bayer_frame(truth, pixel_format)
+
+    def error(image):
+        return float(np.abs(image.astype(int) - truth.astype(int))[4:-4, 4:-4].mean())
+
+    # a modest gain (a few percent on this image), not a dramatic one - so assert only "better"
+    assert error(frame.bgr(best=True)) < error(frame.bgr())
+
+
+def test_best_flag_changes_nothing_for_frames_that_are_not_bayer():
+    bgr = _stripes()
+    assert Frame(bgr, "BGR8").bgr(best=True) is bgr
+    mono = Frame(np.full((10, 12), 7, np.uint8), "Mono8")
+    assert np.array_equal(mono.bgr(best=True), mono.bgr())
