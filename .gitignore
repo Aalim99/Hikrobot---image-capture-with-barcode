@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+
+# Per-machine config, written by the app at runtime. Tracking it makes every
+# launch dirty the working tree and blocks git pull.
+settings.json
+.pytest_cache/
+.venv/
+venv/
+
+# Hikrobot's proprietary SDK wrapper: copy it here if you like, but never commit it
+MvImport/
+
+# test output
+camera_test.jpg
